@@ -1,0 +1,51 @@
+module.exports = class Data1764027955345 {
+    name = 'Data1764027955345'
+
+    async up(db) {
+        await db.query(`CREATE TABLE "transaction" ("id" character varying NOT NULL, "from" character varying(42) NOT NULL, "to" character varying(42), "value" numeric(78,0) NOT NULL, "gas_used" numeric(78,0) NOT NULL, "block_number" integer NOT NULL, "timestamp" TIMESTAMP NOT NULL, "is_contract_creation" boolean NOT NULL DEFAULT false, "contract_address" character varying(42), "success" boolean NOT NULL, CONSTRAINT "PK_89eadb93a89810556e1cbcd6ab9" PRIMARY KEY ("id"))`)
+        await db.query(`CREATE INDEX "IDX_290df3897fac99713afb5f3d7a" ON "transaction" ("from") `)
+        await db.query(`CREATE INDEX "IDX_1713783ebe978fa2ae9654e4bb" ON "transaction" ("to") `)
+        await db.query(`CREATE INDEX "IDX_2d99bb5a0ab5fb8cf8b746eb39" ON "transaction" ("block_number") `)
+        await db.query(`CREATE INDEX "IDX_87f2932d4a558d44a2915f849a" ON "transaction" ("timestamp") `)
+        await db.query(`CREATE INDEX "IDX_77e6ab959046c9f89526e4cc1c" ON "transaction" ("is_contract_creation") `)
+        await db.query(`CREATE INDEX "IDX_db38746bd7b4819effaac7a9d6" ON "transaction" ("contract_address") `)
+        await db.query(`CREATE TABLE "smart_contract" ("id" character varying NOT NULL, "address" character varying(42) NOT NULL, "creator" character varying(42) NOT NULL, "transaction_hash" character varying(66) NOT NULL, "block_number" integer NOT NULL, "timestamp" TIMESTAMP NOT NULL, CONSTRAINT "PK_27627aca2eebd2eb72f26f6399a" PRIMARY KEY ("id"))`)
+        await db.query(`CREATE INDEX "IDX_1f2f899cc57aa4ab9dc042c68f" ON "smart_contract" ("address") `)
+        await db.query(`CREATE INDEX "IDX_a148e5a26b7729e138e9e18d82" ON "smart_contract" ("creator") `)
+        await db.query(`CREATE INDEX "IDX_7b98013bd87e2215721ce69f2f" ON "smart_contract" ("transaction_hash") `)
+        await db.query(`CREATE INDEX "IDX_a89ce27f843614ce6e8ac65f04" ON "smart_contract" ("block_number") `)
+        await db.query(`CREATE INDEX "IDX_c16e6eea5cf16ade45673e0679" ON "smart_contract" ("timestamp") `)
+        await db.query(`CREATE TABLE "active_wallet" ("id" character varying NOT NULL, "address" character varying(42) NOT NULL, "date" date NOT NULL, "transaction_count" integer NOT NULL DEFAULT '1', "total_value_sent" numeric(78,0) NOT NULL DEFAULT '0', "total_value_received" numeric(78,0) NOT NULL DEFAULT '0', "total_gas_used" numeric(78,0) NOT NULL DEFAULT '0', CONSTRAINT "PK_d1500ccb8bc1358e886844da773" PRIMARY KEY ("id"))`)
+        await db.query(`CREATE UNIQUE INDEX "IDX_1669f468d8d18b1b4f50492957" ON "active_wallet" ("address", "date") `)
+        await db.query(`CREATE TABLE "tvl_snapshot" ("id" character varying NOT NULL, "token_address" character varying(42) NOT NULL, "symbol" character varying(10) NOT NULL, "decimals" integer NOT NULL, "total_supply" numeric(78,0) NOT NULL, "block_number" integer NOT NULL, "timestamp" TIMESTAMP NOT NULL, CONSTRAINT "PK_cc30888f8bdfbd46d17a155437b" PRIMARY KEY ("id"))`)
+        await db.query(`CREATE INDEX "IDX_b45d0e120e543538e9e32e380d" ON "tvl_snapshot" ("timestamp") `)
+        await db.query(`CREATE INDEX "IDX_94ef5f400a166c97d13763f87b" ON "tvl_snapshot" ("token_address", "block_number") `)
+        await db.query(`CREATE TYPE "public"."daily_metric_metric_type_enum" AS ENUM('TRANSACTIONS', 'DEPLOYED_SMART_CONTRACTS', 'ACTIVE_WALLETS', 'TVL')`)
+        await db.query(`CREATE TABLE "daily_metric" ("id" character varying NOT NULL, "metric_type" "public"."daily_metric_metric_type_enum" NOT NULL, "date" date NOT NULL, "count" integer NOT NULL DEFAULT '0', "value_native" numeric(78,0) NOT NULL DEFAULT '0', "metadata" json, "created_at" TIMESTAMP NOT NULL, "updated_at" TIMESTAMP NOT NULL, CONSTRAINT "PK_b8da0f11e7326dc368e4c5835fa" PRIMARY KEY ("id"))`)
+        await db.query(`CREATE UNIQUE INDEX "IDX_f8eccc258d2b548e0804af52e7" ON "daily_metric" ("metric_type", "date") `)
+    }
+
+    async down(db) {
+        await db.query(`DROP TABLE "transaction"`)
+        await db.query(`DROP INDEX "public"."IDX_290df3897fac99713afb5f3d7a"`)
+        await db.query(`DROP INDEX "public"."IDX_1713783ebe978fa2ae9654e4bb"`)
+        await db.query(`DROP INDEX "public"."IDX_2d99bb5a0ab5fb8cf8b746eb39"`)
+        await db.query(`DROP INDEX "public"."IDX_87f2932d4a558d44a2915f849a"`)
+        await db.query(`DROP INDEX "public"."IDX_77e6ab959046c9f89526e4cc1c"`)
+        await db.query(`DROP INDEX "public"."IDX_db38746bd7b4819effaac7a9d6"`)
+        await db.query(`DROP TABLE "smart_contract"`)
+        await db.query(`DROP INDEX "public"."IDX_1f2f899cc57aa4ab9dc042c68f"`)
+        await db.query(`DROP INDEX "public"."IDX_a148e5a26b7729e138e9e18d82"`)
+        await db.query(`DROP INDEX "public"."IDX_7b98013bd87e2215721ce69f2f"`)
+        await db.query(`DROP INDEX "public"."IDX_a89ce27f843614ce6e8ac65f04"`)
+        await db.query(`DROP INDEX "public"."IDX_c16e6eea5cf16ade45673e0679"`)
+        await db.query(`DROP TABLE "active_wallet"`)
+        await db.query(`DROP INDEX "public"."IDX_1669f468d8d18b1b4f50492957"`)
+        await db.query(`DROP TABLE "tvl_snapshot"`)
+        await db.query(`DROP INDEX "public"."IDX_b45d0e120e543538e9e32e380d"`)
+        await db.query(`DROP INDEX "public"."IDX_94ef5f400a166c97d13763f87b"`)
+        await db.query(`DROP TYPE "public"."daily_metric_metric_type_enum"`)
+        await db.query(`DROP TABLE "daily_metric"`)
+        await db.query(`DROP INDEX "public"."IDX_f8eccc258d2b548e0804af52e7"`)
+    }
+}

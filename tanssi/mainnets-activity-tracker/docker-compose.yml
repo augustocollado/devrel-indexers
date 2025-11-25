@@ -1,0 +1,56 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: squid-postgres
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${DB_NAME:-squid}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASS:-postgres}
+    ports:
+      - "${DB_PORT:-23798}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  processor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: squid-processor
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+    command: ["npm", "run", "process"]
+    restart: unless-stopped
+
+  graphql:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: squid-graphql
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+    ports:
+      - "4000:4000"
+    command: ["npm", "run", "serve"]
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

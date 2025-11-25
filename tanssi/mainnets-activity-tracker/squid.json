@@ -1,0 +1,10 @@
+{
+  "dest": {
+    "driver": "postgres",
+    "host": "localhost",
+    "port": 23798,
+    "database": "squid",
+    "username": "postgres",
+    "password": "postgres"
+  }
+}

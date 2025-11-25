@@ -1,0 +1,52 @@
+type Transaction @entity {
+  id: ID!
+  from: String! @index
+  to: String @index
+  value: String!
+  gasUsed: String!
+  blockNumber: Int! @index
+  timestamp: DateTime! @index
+  isContractCreation: Boolean! @index
+  contractAddress: String @index
+  success: Boolean!
+}
+
+type SmartContract @entity {
+  id: ID!
+  address: String! @unique @index
+  creator: String! @index
+  transactionHash: String! @index
+  blockNumber: Int! @index
+  timestamp: DateTime! @index
+}
+
+type ActiveWallet @entity {
+  id: ID!
+  address: String! @index
+  date: DateTime! @index
+  transactionCount: Int!
+  totalValueSent: String!
+  totalValueReceived: String!
+  totalGasUsed: String!
+}
+
+type TVLSnapshot @entity {
+  id: ID!
+  tokenAddress: String! @index
+  symbol: String!
+  decimals: Int!
+  totalSupply: String!
+  blockNumber: Int! @index
+  timestamp: DateTime! @index
+}
+
+type DailyMetric @entity {
+  id: ID!
+  metricType: String! @index
+  date: DateTime! @index
+  count: Int!
+  valueNative: String!
+  metadata: JSON
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
