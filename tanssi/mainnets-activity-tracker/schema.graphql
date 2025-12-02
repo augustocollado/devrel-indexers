@@ -21,9 +21,9 @@ type SmartContract @entity {
 }
 
 type ActiveWallet @entity {
-  id: ID!
-  address: String! @index
-  date: DateTime! @index
+  id: ID! # address as primary key
+  firstSeen: DateTime!
+  lastSeen: DateTime!
   transactionCount: Int!
   totalValueSent: String!
   totalValueReceived: String!

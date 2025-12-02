@@ -6,6 +6,66 @@ export class TransactionHandler {
         const transactions: Transaction[] = []
         const contracts: SmartContract[] = []
         const activeWallets = new Map<string, ActiveWallet>()
+        const contractAddresses = new Set<string>()
+
+        // First pass: collect all contract addresses
+        for (const { block, transactions: blockTxs } of blocks) {
+            for (const tx of blockTxs) {
+                // Track contract creation addresses
+                if ((!tx.to || tx.to === null) && tx.contractAddress) {
+                    contractAddresses.add(tx.contractAddress.toLowerCase())
+                }
+            }
+        }
+
+        // Load existing contracts from database to avoid counting them as wallets
+        try {
+            const toAddresses = blocks.flatMap(({ transactions: blockTxs }) => 
+                blockTxs.filter((tx: any) => tx.to).map((tx: any) => tx.to.toLowerCase())
+            )
+            
+            if (toAddresses.length > 0) {
+                const uniqueAddresses = [...new Set(toAddresses)]
+                const existingContracts = await ctx.store.findBy(SmartContract, {
+                    address: uniqueAddresses as any
+                })
+                existingContracts.forEach(contract => contractAddresses.add(contract.address))
+            }
+        } catch (error) {
+            // Table might not exist yet during first run - that's OK
+            console.log('Could not load existing contracts, will only track new ones')
+        }
+
+        // Collect all unique wallet addresses we'll be processing
+        const walletAddresses = new Set<string>()
+        for (const { block, transactions: blockTxs } of blocks) {
+            for (const tx of blockTxs) {
+                const fromAddress = tx.from.toLowerCase()
+                if (!contractAddresses.has(fromAddress)) {
+                    walletAddresses.add(fromAddress)
+                }
+                
+                if (tx.to) {
+                    const toAddress = tx.to.toLowerCase()
+                    if (!contractAddresses.has(toAddress)) {
+                        walletAddresses.add(toAddress)
+                    }
+                }
+            }
+        }
+
+        // Load existing wallets from database to merge with new data
+        if (walletAddresses.size > 0) {
+            const existingWallets = await ctx.store.findBy(ActiveWallet, {
+                id: [...walletAddresses] as any
+            })
+            if (existingWallets.length > 0) {
+                console.log(`Loaded ${existingWallets.length} existing wallets for merging`)
+            }
+            existingWallets.forEach(wallet => {
+                activeWallets.set(wallet.id, wallet)
+            })
+        }
 
         for (const { block, transactions: blockTxs } of blocks) {
             for (const tx of blockTxs) {
@@ -36,32 +96,49 @@ export class TransactionHandler {
                     contracts.push(contract)
                 }
 
-                // Track active wallets
-                const date = new Date(block.timestamp)
-                date.setHours(0, 0, 0, 0) // Normalize to day
+                // Track active wallets (only EOA, not smart contracts)
+                const txTimestamp = new Date(block.timestamp)
 
-                // From address
-                const fromKey = this.getId(tx.from, date)
-                let fromWallet = activeWallets.get(fromKey)
-                if (!fromWallet) {
-                    fromWallet = this.initializeWallet(tx.from.toLowerCase(), date)
-                    activeWallets.set(fromKey, fromWallet)
-                }
-
-                fromWallet.transactionCount++
-                fromWallet.totalValueSent = (BigInt(fromWallet.totalValueSent) + BigInt(tx.value)).toString()
-                fromWallet.totalGasUsed = (BigInt(fromWallet.totalGasUsed) + BigInt(tx.gasUsed || 0)).toString()
-
-                // To address (if exists)
-                if (tx.to) {
-                    const toKey = this.getId(tx.to, date)
-                    let toWallet = activeWallets.get(toKey)
-                    if (!toWallet) {
-                        toWallet = this.initializeWallet(tx.to.toLowerCase(), date)
-                        activeWallets.set(toKey, toWallet)
+                // From address (only if not a contract)
+                const fromAddress = tx.from.toLowerCase()
+                if (!contractAddresses.has(fromAddress)) {
+                    let fromWallet = activeWallets.get(fromAddress)
+                    if (!fromWallet) {
+                        fromWallet = this.initializeWallet(fromAddress, txTimestamp)
+                        activeWallets.set(fromAddress, fromWallet)
                     }
 
-                    toWallet.totalValueReceived = (BigInt(toWallet.totalValueReceived) + BigInt(tx.value)).toString()
+                    // Update amounts and timestamps
+                    fromWallet.totalValueSent = (BigInt(fromWallet.totalValueSent) + BigInt(tx.value)).toString()
+                    fromWallet.totalGasUsed = (BigInt(fromWallet.totalGasUsed) + BigInt(tx.gasUsed || 0)).toString()
+                    
+                    fromWallet.transactionCount = await ctx.store.count(Transaction, {
+                        where: { from: fromWallet.id }
+                    }) + transactions.filter(t => t.from === fromWallet!.id).length
+                
+                    // Update lastSeen
+                    if (txTimestamp > fromWallet.lastSeen) {
+                        fromWallet.lastSeen = txTimestamp
+                    }
+                }
+
+                // To address (only if exists and not a contract)
+                if (tx.to) {
+                    const toAddress = tx.to.toLowerCase()
+                    if (!contractAddresses.has(toAddress)) {
+                        let toWallet = activeWallets.get(toAddress)
+                        if (!toWallet) {
+                            toWallet = this.initializeWallet(toAddress, txTimestamp)
+                            activeWallets.set(toAddress, toWallet)
+                        }
+
+                        toWallet.totalValueReceived = (BigInt(toWallet.totalValueReceived) + BigInt(tx.value)).toString()
+                        
+                        // Update lastSeen
+                        if (txTimestamp > toWallet.lastSeen) {
+                            toWallet.lastSeen = txTimestamp
+                        }
+                    }
                 }
             }
         }
@@ -72,19 +149,15 @@ export class TransactionHandler {
         await ctx.store.save([...activeWallets.values()])
     }
 
-    private initializeWallet(address: string, date: Date): ActiveWallet {
+    private initializeWallet(address: string, timestamp: Date): ActiveWallet {
         const wallet = new ActiveWallet()
-        wallet.id = this.getId(address, date)
-        wallet.address = address
-        wallet.date = date
+        wallet.id = address
+        wallet.firstSeen = timestamp
+        wallet.lastSeen = timestamp
         wallet.transactionCount = 0
         wallet.totalValueSent = "0"
         wallet.totalValueReceived = "0"
         wallet.totalGasUsed = "0"
         return wallet
-    }
-
-    private getId(address: string, date: Date): string {
-        return `${address}-${date.toISOString().split('T')[0]}`
     }
 }

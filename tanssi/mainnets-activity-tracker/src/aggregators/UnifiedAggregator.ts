@@ -1,17 +1,43 @@
 import { Store } from '@subsquid/typeorm-store'
 import { DailyMetric, MetricType, Transaction, SmartContract, ActiveWallet, TVLSnapshot } from '../model'
-import { Between } from 'typeorm'
+import { Between, In } from 'typeorm'
 
 export class UnifiedAggregator {
     constructor(private store: Store) {}
 
     async aggregateLatest(): Promise<void> {
+        // Get the date range of actual data in the database
+        const transactions = await this.store.find(Transaction, {
+            order: {
+                timestamp: 'ASC'
+            },
+            take: 1
+        })
 
-        // Proccess the last 2 days
-        const endDate = new Date()
-        const startDate = new Date(endDate.getTime() - (2 * 24 * 60 * 60 * 1000))
+        if (transactions.length === 0) {
+            console.log('No transactions found to aggregate')
+            return
+        }
 
-        await this.aggregateDaily(startDate, endDate)
+        // Start from the earliest transaction date
+        const startDate = new Date(transactions[0].timestamp)
+        startDate.setHours(0, 0, 0, 0) // Start of day
+        
+        // End at yesterday 23:59:59 (complete days only)
+        const yesterday = new Date()
+        yesterday.setDate(yesterday.getDate() - 1)
+        yesterday.setHours(23, 59, 59, 999)
+        
+        // Also process today (incomplete day)
+        const endOfToday = new Date()
+
+        console.log(`Aggregating complete days from ${startDate.toISOString()} to ${yesterday.toISOString()}`)
+        await this.aggregateDaily(startDate, yesterday)
+        
+        console.log(`Aggregating today (incomplete) from start of day to now`)
+        const startOfToday = new Date()
+        startOfToday.setHours(0, 0, 0, 0)
+        await this.aggregateDaily(startOfToday, endOfToday)
     }
 
     async aggregateDaily(fromDate: Date, toDate: Date): Promise<void> {
@@ -52,9 +78,25 @@ export class UnifiedAggregator {
         })
 
         // Create or update daily metrics
+        const today = new Date().toISOString().split('T')[0]
+        const yesterday = new Date()
+        yesterday.setDate(yesterday.getDate() - 1)
+        const yesterdayKey = yesterday.toISOString().split('T')[0]
+        
         for (const [dateKey, dayTxs] of dailyGroups) {
             const date = new Date(dateKey)
             const id = `${MetricType.TRANSACTIONS}-${dateKey}`
+
+            // Check if metric already exists
+            const existing = await this.store.get(DailyMetric, id)
+            const isToday = dateKey === today
+            const isYesterday = dateKey === yesterdayKey
+            
+            // Skip if exists and it's not today or yesterday
+            if (existing && !isToday && !isYesterday) {
+                console.log(`Transaction metric for ${dateKey} is finalized, skipping`)
+                continue
+            }
 
             let totalValue = BigInt(0)
             let successfulTxs = 0
@@ -64,7 +106,7 @@ export class UnifiedAggregator {
                 if (tx.success) successfulTxs++
             })
 
-            const metric = new DailyMetric()
+            const metric = existing || new DailyMetric()
             metric.id = id
             metric.metricType = MetricType.TRANSACTIONS
             metric.date = date
@@ -74,10 +116,13 @@ export class UnifiedAggregator {
                 successful: successfulTxs,
                 failed: dayTxs.length - successfulTxs
             }
-            metric.createdAt = new Date()
+            if (!existing) {
+                metric.createdAt = new Date()
+            }
             metric.updatedAt = new Date()
 
-            console.log(`Saving transaction metric for ${dateKey}:`, metric.id, metric.count)
+            const action = existing ? 'Updating' : 'Saving'
+            console.log(`${action} transaction metric for ${dateKey}:`, metric.id, metric.count)
             await this.store.save(metric)
         }
     }
@@ -101,73 +146,126 @@ export class UnifiedAggregator {
             dailyGroups.get(dateKey)!.push(contract)
         })
 
+        const today = new Date().toISOString().split('T')[0]
+        const yesterday = new Date()
+        yesterday.setDate(yesterday.getDate() - 1)
+        const yesterdayKey = yesterday.toISOString().split('T')[0]
+        
         for (const [dateKey, dayContracts] of dailyGroups) {
             const date = new Date(dateKey)
             const id = `${MetricType.DEPLOYED_SMART_CONTRACTS}-${dateKey}`
 
-            const metric = new DailyMetric()
+            // Check if metric already exists
+            const existing = await this.store.get(DailyMetric, id)
+            const isToday = dateKey === today
+            const isYesterday = dateKey === yesterdayKey
+            
+            // Skip if exists and it's not today or yesterday
+            if (existing && !isToday && !isYesterday) {
+                console.log(`Contract metric for ${dateKey} is finalized, skipping`)
+                continue
+            }
+
+            const metric = existing || new DailyMetric()
             metric.id = id
             metric.metricType = MetricType.DEPLOYED_SMART_CONTRACTS
             metric.date = date
             metric.count = dayContracts.length
             metric.valueNative = "0"
-            metric.createdAt = new Date()
+            if (!existing) {
+                metric.createdAt = new Date()
+            }
             metric.updatedAt = new Date()
 
-            console.log(`Saving contract metric for ${dateKey}:`, metric.id, metric.count)
+            const action = existing ? 'Updating' : 'Saving'
+            console.log(`${action} contract metric for ${dateKey}:`, metric.id, metric.count)
             await this.store.save(metric)
         }
     }
 
     private async aggregateWallets(fromDate: Date, toDate: Date): Promise<void> {
-        const wallets = await this.store.find(ActiveWallet, {
+        // Query transactions to find which wallets were active each day
+        const transactions = await this.store.find(Transaction, {
             where: {
-                date: Between(fromDate, toDate)
+                timestamp: Between(fromDate, toDate)
             }
         })
 
-        if (wallets.length === 0) return
+        if (transactions.length === 0) return
 
-        const dailyGroups = new Map<string, ActiveWallet[]>()
-        wallets.forEach(wallet => {
-            // Converts to Date if it's not already
-            const walletDate = wallet.date instanceof Date ? wallet.date : new Date(wallet.date)
-            const dateKey = walletDate.toISOString().split('T')[0]
-            if (!dailyGroups.has(dateKey)) {
-                dailyGroups.set(dateKey, [])
+        // Group transactions by date and wallet address
+        const dailyWalletActivity = new Map<string, Set<string>>()
+        transactions.forEach(tx => {
+            const txDate = tx.timestamp instanceof Date ? tx.timestamp : new Date(tx.timestamp)
+            const dateKey = txDate.toISOString().split('T')[0]
+            
+            if (!dailyWalletActivity.has(dateKey)) {
+                dailyWalletActivity.set(dateKey, new Set<string>())
             }
-            dailyGroups.get(dateKey)!.push(wallet)
+            dailyWalletActivity.get(dateKey)!.add(tx.from)
         })
 
-        for (const [dateKey, dayWallets] of dailyGroups) {
+        // Load all active wallets to access their metadata
+        const allWalletAddresses = Array.from(
+            new Set(transactions.map(tx => tx.from))
+        )
+        const wallets = await this.store.findBy(ActiveWallet, {
+            id: In(allWalletAddresses)
+        })
+        const walletMap = new Map(wallets.map(w => [w.id, w]))
+
+        const today = new Date().toISOString().split('T')[0]
+        const yesterday = new Date()
+        yesterday.setDate(yesterday.getDate() - 1)
+        const yesterdayKey = yesterday.toISOString().split('T')[0]
+        
+        for (const [dateKey, activeWalletAddresses] of dailyWalletActivity) {
             const date = new Date(dateKey)
             const id = `${MetricType.ACTIVE_WALLETS}-${dateKey}`
+
+            // Check if metric already exists
+            const existing = await this.store.get(DailyMetric, id)
+            const isToday = dateKey === today
+            const isYesterday = dateKey === yesterdayKey
+            
+            // Skip if exists and it's not today or yesterday
+            if (existing && !isToday && !isYesterday) {
+                console.log(`Wallet metric for ${dateKey} is finalized, skipping`)
+                continue
+            }
 
             let totalValueSent = BigInt(0)
             let totalValueReceived = BigInt(0)
             let totalGasUsed = BigInt(0)
 
-            dayWallets.forEach(wallet => {
-                totalValueSent += BigInt(wallet.totalValueSent)
-                totalValueReceived += BigInt(wallet.totalValueReceived)
-                totalGasUsed += BigInt(wallet.totalGasUsed)
-            })
+            // Aggregate values from the wallets that were active on this day
+            for (const address of activeWalletAddresses) {
+                const wallet = walletMap.get(address)
+                if (wallet) {
+                    totalValueSent += BigInt(wallet.totalValueSent)
+                    totalValueReceived += BigInt(wallet.totalValueReceived)
+                    totalGasUsed += BigInt(wallet.totalGasUsed)
+                }
+            }
 
-            const metric = new DailyMetric()
+            const metric = existing || new DailyMetric()
             metric.id = id
             metric.metricType = MetricType.ACTIVE_WALLETS
             metric.date = date
-            metric.count = dayWallets.length
+            metric.count = activeWalletAddresses.size
             metric.valueNative = totalValueSent.toString()
             metric.metadata = {
                 totalValueSent: totalValueSent.toString(),
                 totalValueReceived: totalValueReceived.toString(),
                 totalGasUsed: totalGasUsed.toString()
             }
-            metric.createdAt = new Date()
+            if (!existing) {
+                metric.createdAt = new Date()
+            }
             metric.updatedAt = new Date()
 
-            console.log(`Saving wallet metric for ${dateKey}:`, metric.id, metric.count)
+            const action = existing ? 'Updating' : 'Saving'
+            console.log(`${action} wallet metric for ${dateKey}:`, metric.id, metric.count)
             await this.store.save(metric)
         }
     }
@@ -200,11 +298,27 @@ export class UnifiedAggregator {
             }
         })
 
+        const today = new Date().toISOString().split('T')[0]
+        const yesterday = new Date()
+        yesterday.setDate(yesterday.getDate() - 1)
+        const yesterdayKey = yesterday.toISOString().split('T')[0]
+        
         for (const [dateKey, tokenSnapshots] of dailyGroups) {
             const date = new Date(dateKey)
             const id = `${MetricType.TVL}-${dateKey}`
 
-            const metric = new DailyMetric()
+            // Check if metric already exists
+            const existing = await this.store.get(DailyMetric, id)
+            const isToday = dateKey === today
+            const isYesterday = dateKey === yesterdayKey
+            
+            // Skip if exists and it's not today or yesterday
+            if (existing && !isToday && !isYesterday) {
+                console.log(`TVL metric for ${dateKey} is finalized, skipping`)
+                continue
+            }
+
+            const metric = existing || new DailyMetric()
             metric.id = id
             metric.metricType = MetricType.TVL
             metric.date = date
@@ -213,10 +327,13 @@ export class UnifiedAggregator {
             metric.metadata = {
                 tokens: Array.from(tokenSnapshots.keys())
             }
-            metric.createdAt = new Date()
+            if (!existing) {
+                metric.createdAt = new Date()
+            }
             metric.updatedAt = new Date()
 
-            console.log(`Saving TVL metric for ${dateKey}:`, metric.id, metric.count)
+            const action = existing ? 'Updating' : 'Saving'
+            console.log(`${action} TVL metric for ${dateKey}:`, metric.id, metric.count)
             await this.store.save(metric)
         }
     }

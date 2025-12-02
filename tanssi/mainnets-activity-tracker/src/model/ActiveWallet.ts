@@ -1,18 +1,17 @@
-import { Entity, PrimaryColumn, Column, Index } from "typeorm"
+import { Entity, PrimaryColumn, Column } from "typeorm"
 
 @Entity()
-@Index(["address", "date"], { unique: true })
 export class ActiveWallet {
-    @PrimaryColumn()
-    id!: string // address + date
+    @PrimaryColumn("varchar")
+    id!: string
 
-    @Column("varchar", { length: 42 })
-    address!: string
+    @Column("timestamp")
+    firstSeen!: Date
 
-    @Column("date")
-    date!: Date
+    @Column("timestamp")
+    lastSeen!: Date
 
-    @Column("int", { default: 1 })
+    @Column("int", { default: 0 })
     transactionCount!: number
 
     @Column("numeric", { precision: 78, scale: 0, default: "0" })
