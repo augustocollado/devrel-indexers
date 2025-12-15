@@ -12,8 +12,7 @@ const AGGREGATION_INTERVAL_BLOCKS = Math.floor(AGGREGATION_INTERVAL_MINUTES * 60
 const processor = new EvmBatchProcessor()
     .setRpcEndpoint({
         url: RPC_ENDPOINT,
-        rateLimit: 100,
-        
+        rateLimit: 50,
     })
     .setFinalityConfirmation(1)
     .setFields({

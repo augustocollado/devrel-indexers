@@ -1,13 +1,13 @@
 manifestVersion: subsquid.io/v0.1
 name: mainnetsidxs
 version: 1
-description: A template for Frontier EVM networks (Moonbeam, Astar)
+description: A template for EVM mainnets
 build: 
 deploy:
   addons:
     postgres: 
-    rpc:
-      - moonriver-substrate.http
+      config:
+        statement_timeout: 300000
   processor:
     cmd:
       - sqd

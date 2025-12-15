@@ -42,12 +42,17 @@ export class UnifiedAggregator {
 
     async aggregateDaily(fromDate: Date, toDate: Date): Promise<void> {
         try {
-            await Promise.all([
-                this.aggregateTransactions(fromDate, toDate),
-                this.aggregateContracts(fromDate, toDate),
-                this.aggregateWallets(fromDate, toDate),
-                this.aggregateTVL(fromDate, toDate)
-            ])
+            console.log('Starting transaction aggregation...')
+            await this.aggregateTransactions(fromDate, toDate)
+            
+            console.log('Starting contract aggregation...')
+            await this.aggregateContracts(fromDate, toDate)
+            
+            console.log('Starting wallet aggregation...')
+            await this.aggregateWallets(fromDate, toDate)
+            
+            console.log('Starting TVL aggregation...')
+            await this.aggregateTVL(fromDate, toDate)
             
             console.log('Unified aggregation completed successfully')
         } catch (error) {
@@ -271,70 +276,87 @@ export class UnifiedAggregator {
     }
 
     private async aggregateTVL(fromDate: Date, toDate: Date): Promise<void> {
-        const tvlSnapshots = await this.store.find(TVLSnapshot, {
-            where: {
-                timestamp: Between(fromDate, toDate)
-            },
-            order: {
-                blockNumber: 'DESC'
-            }
-        })
-
-        if (tvlSnapshots.length === 0) return
-
-        // Group by date and get latest snapshot per token per day
-        const dailyGroups = new Map<string, Map<string, TVLSnapshot>>()
-        
-        tvlSnapshots.forEach(snapshot => {
-            const dateKey = snapshot.timestamp.toISOString().split('T')[0]
-            if (!dailyGroups.has(dateKey)) {
-                dailyGroups.set(dateKey, new Map())
-            }
+        try {
+            console.log(`Aggregating TVL from ${fromDate.toISOString()} to ${toDate.toISOString()}`)
             
-            const dayMap = dailyGroups.get(dateKey)!
-            const existing = dayMap.get(snapshot.tokenAddress)
-            if (!existing || snapshot.blockNumber > existing.blockNumber) {
-                dayMap.set(snapshot.tokenAddress, snapshot)
-            }
-        })
+            const tvlSnapshots = await this.store.find(TVLSnapshot, {
+                where: {
+                    timestamp: Between(fromDate, toDate)
+                },
+                order: {
+                    blockNumber: 'DESC'
+                }
+            })
 
-        const today = new Date().toISOString().split('T')[0]
-        const yesterday = new Date()
-        yesterday.setDate(yesterday.getDate() - 1)
-        const yesterdayKey = yesterday.toISOString().split('T')[0]
+            console.log(`Found ${tvlSnapshots.length} TVL snapshots for aggregation`)
+            if (tvlSnapshots.length === 0) return
+
+            // Group by date and get latest snapshot per token per day
+            const dailyGroups = new Map<string, Map<string, TVLSnapshot>>()
         
-        for (const [dateKey, tokenSnapshots] of dailyGroups) {
-            const date = new Date(dateKey)
-            const id = `${MetricType.TVL}-${dateKey}`
-
-            // Check if metric already exists
-            const existing = await this.store.get(DailyMetric, id)
-            const isToday = dateKey === today
-            const isYesterday = dateKey === yesterdayKey
+            tvlSnapshots.forEach(snapshot => {
+                const dateKey = snapshot.timestamp.toISOString().split('T')[0]
+                if (!dailyGroups.has(dateKey)) {
+                    dailyGroups.set(dateKey, new Map())
+                }
             
-            // Skip if exists and it's not today or yesterday
-            if (existing && !isToday && !isYesterday) {
-                console.log(`TVL metric for ${dateKey} is finalized, skipping`)
-                continue
-            }
+                const dayMap = dailyGroups.get(dateKey)!
+                const existing = dayMap.get(snapshot.tokenAddress)
+                if (!existing || snapshot.blockNumber > existing.blockNumber) {
+                    dayMap.set(snapshot.tokenAddress, snapshot)
+                }
+            })
 
-            const metric = existing || new DailyMetric()
-            metric.id = id
-            metric.metricType = MetricType.TVL
-            metric.date = date
-            metric.count = tokenSnapshots.size
-            metric.valueNative = "0"
-            metric.metadata = {
-                tokens: Array.from(tokenSnapshots.keys())
-            }
-            if (!existing) {
-                metric.createdAt = new Date()
-            }
-            metric.updatedAt = new Date()
+            const today = new Date().toISOString().split('T')[0]
+            const yesterday = new Date()
+            yesterday.setDate(yesterday.getDate() - 1)
+            const yesterdayKey = yesterday.toISOString().split('T')[0]
+        
+            for (const [dateKey, tokenSnapshots] of dailyGroups) {
+                const date = new Date(dateKey)
+                const id = `${MetricType.TVL}-${dateKey}`
 
-            const action = existing ? 'Updating' : 'Saving'
-            console.log(`${action} TVL metric for ${dateKey}:`, metric.id, metric.count)
-            await this.store.save(metric)
+                // Check if metric already exists
+                const existing = await this.store.get(DailyMetric, id)
+                const isToday = dateKey === today
+                const isYesterday = dateKey === yesterdayKey
+                
+                // Skip if exists and it's not today or yesterday
+                if (existing && !isToday && !isYesterday) {
+                    console.log(`TVL metric for ${dateKey} is finalized, skipping`)
+                    continue
+                }
+
+                const metric = existing || new DailyMetric()
+                metric.id = id
+                metric.metricType = MetricType.TVL
+                metric.date = date
+                metric.count = tokenSnapshots.size
+                metric.valueNative = "0"
+                metric.metadata = {
+                    tokens: Array.from(tokenSnapshots.keys())
+                }
+                if (!existing) {
+                    metric.createdAt = new Date()
+                }
+                metric.updatedAt = new Date()
+
+                const action = existing ? 'Updating' : 'Saving'
+                console.log(`${action} TVL metric for ${dateKey}:`, metric.id, metric.count)
+                await this.store.save(metric)
+            }
+            console.log('TVL aggregation completed successfully')
+        } catch (error) {
+            console.error('Error during TVL aggregation:', error)
+            if (error instanceof Error) {
+                console.error('Error details:', {
+                    message: error.message,
+                    stack: error.stack,
+                    dateRange: `${fromDate.toISOString()} to ${toDate.toISOString()}`
+                })
+            }
+            // Re-throw to let processor handle retry logic
+            throw error
         }
     }
 }
